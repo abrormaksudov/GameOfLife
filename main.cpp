@@ -5,12 +5,22 @@
 #include <ctime>
 #include <chrono>
 #include <thread>
+#include <sys/ioctl.h>      // for terminal size
+#include <unistd.h>         // for terminal size
 
 constexpr char ALIVE    {'#'};
 constexpr char DEAD     {'.'};
 constexpr int  ROWS      {40};
 constexpr int  COLS      {40};
-constexpr int  DELAY_MS {100};
+constexpr int  DELAY_MS  {100};
+
+std::pair<int, int> getTerminalSize() {
+    struct winsize size{};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == -1) {
+        return {24, 80};
+    }
+    return {size.ws_row - 5, size.ws_col / 2};
+}
 
 struct Pattern {
     std::string name;
@@ -31,13 +41,20 @@ static const std::vector<Pattern> PATTERNS = {
     }}
 };
 
-void displayGrid(const std::vector<std::vector<char>>& grid) {
+void displayGrid(const std::vector<std::vector<char>>& grid, const int generation,
+                 const std::string& patternName) {
+    std::cout << "\033[1;1H";
+
     for (const auto& row : grid) {
         for (const char cell : row) {
             std::cout << cell << ' ';
         }
         std::cout << '\n';
     }
+    std::cout << "\nPattern: " << patternName << " | "
+              << "Generation: " << generation << " | "
+              << "Press Ctrl+C to exit\n";
+    std::cout.flush();
 }
 
 std::vector<std::vector<char>> createGrid(const int rows, const int cols) {
@@ -59,8 +76,6 @@ void setInitialPattern(std::vector<std::vector<char>>& grid, const Pattern& patt
 }
 
 void setRandomPattern(auto& grid, float aliveProbability = 0.2f) {
-    srand(time(nullptr));
-
     for (auto& row : grid) {
         for (auto& cell : row) {
             cell = (static_cast<float>(rand()) / RAND_MAX < aliveProbability) ? ALIVE : DEAD;
@@ -82,7 +97,7 @@ Pattern selectPattern() {
         std::cin >> choice;
 
         if (std::cin.fail() || choice < 0 || choice >= static_cast<int>(PATTERNS.size())) {
-            std::cout << "\033[2J\033[1;1H";
+            std::cout << "\033[2J\033[3J\033[1;1H";
             std::cin.clear();
             std::cin.ignore(1000, '\n');
             std::cout << "Invalid input. Please try again.\n";
@@ -144,34 +159,31 @@ std::vector<std::vector<char>> nextGeneration(const std::vector<std::vector<char
 }
 
 int main() {
-    auto grid = createGrid(ROWS, COLS);
+    srand(time(nullptr));
+
+    auto [termRows, termCols] = getTerminalSize();
     Pattern selectedPattern = selectPattern();
 
+    auto grid = createGrid(termRows, termCols);
     if (selectedPattern.name == "Random") {
         setRandomPattern(grid);
     } else {
         setInitialPattern(grid, selectedPattern);
     }
 
-    std::cout << "\033[2J\033[1;1H";
-    displayGrid(grid);
+    std::cout << "\033[2J\033[?25l";
+    displayGrid(grid, 0, selectedPattern.name);
     std::cout << "\nInitial pattern: " << selectedPattern.name
-              << ". Press Enter to start simulation...";
+              << " | Press Enter to start simulation...";
+    std::cout.flush();
 
     std::cin.ignore(1000, '\n');
     std::cin.get();
 
     int generation = 0;
     while (true) {
-        std::cout << "\033[2J\033[1;1H";
-        displayGrid(grid);
-
-        std::cout << "\nPattern: " << selectedPattern.name << " | "
-                  << "Generation: " << generation << " | "
-                  << "Press Ctrl+C to exit\n";
-
+        displayGrid(grid, generation, selectedPattern.name);
         std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_MS));
-
         grid = nextGeneration(grid);
         generation++;
     }
