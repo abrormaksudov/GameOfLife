@@ -18,7 +18,7 @@ struct Pattern {
 class GameOfLife {
     static constexpr char ALIVE             {'#'};
     static constexpr char DEAD              {'.'};
-    static constexpr int  DELAY_MS          {100};
+    static constexpr int  DELAY_MS          {50};
     static constexpr int  MAX_GENERATIONS {10000};
 
     std::vector<std::vector<char>> grid;
@@ -70,6 +70,29 @@ class GameOfLife {
             }
         }
         return result;
+    }
+
+    void displayState() const {
+        std::string message;
+
+        if (loopLength > 0) {
+            message = "LOOP DETECTED (IN GENERATION: " +
+                std::to_string(generationHistory.size()) + ")";
+        } else if (loopLength == -1) {
+            message = "ALL CELLS HAVE DIED";
+        } else {
+            return;
+        }
+
+        int messageLength = message.length();
+        int centerRow = rows / 2;
+        int startCol = (cols - messageLength / 2);
+
+        std::cout << "\033[s";  // save cursor position
+        std::cout << "\033[" << centerRow << ";" << startCol << "H";
+        std::cout << "\033[7m " << message << " \033[0m";
+        std::cout << "\033[u";  // restore cursor position
+        std::cout.flush();
     }
 
 public:
@@ -157,10 +180,22 @@ public:
                   << " | Generation: "      << generation
                   << " | Alive cells: "     << currentAliveCells
                   << " | Total births: "    << totalBirths
-                  << " | Total deaths: "    << totalDeaths
-                  << "\nPress Ctrl+C to exit\n";
-        std::cout << generationHistory.size() << loopLength;
+                  << " | Total deaths: "    << totalDeaths;
+
+        if (loopLength > 0) {
+            std::cout << " | State: Loop (period: " << loopLength << ")";
+        } else if (loopLength == -1) {
+            std::cout << " | State: Extinction";
+        } else {
+            std::cout << " | State: Evolving";
+        }
+
+        std::cout << "\nPress Ctrl+C to exit\n";
         std::cout.flush();
+
+        if (loopLength != 0) {
+            displayState();
+        }
     }
 
     void computeNextGeneration() {
@@ -229,8 +264,7 @@ public:
         clearScreen();
         displayGrid();
 
-        std::cout << "\nInitial pattern: " << pattern.name
-                  << " | Press Enter to start simulation...";
+        std::cout << "Press Enter to start simulation...";
         std::cout.flush();
         std::cin.ignore(1000, '\n');
         std::cin.get();
