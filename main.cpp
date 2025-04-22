@@ -16,12 +16,14 @@ struct Pattern {
 };
 
 class GameOfLife {
-    static constexpr char ALIVE             {'#'};
-    static constexpr char DEAD              {'.'};
-    static constexpr int  DELAY_MS          {50};
+    static constexpr std::string ALIVE_CHAR {"■"};
+    static constexpr std::string DEAD_CHAR  {' '};
+    static constexpr bool ALIVE            {true};
+    static constexpr bool DEAD            {false};
+    static constexpr int  DELAY_MS          {100};
     static constexpr int  MAX_GENERATIONS {10000};
 
-    std::vector<std::vector<char>> grid;
+    std::vector<std::vector<bool>> grid;
     int rows                   {};
     int cols                   {};
     int generation             {};
@@ -65,8 +67,8 @@ class GameOfLife {
     std::string serializeGrid() const {
         std::string result;
         for (const auto& row : grid) {
-            for (char cell : row) {
-                result.push_back(cell);
+            for (bool cell : row) {
+                result.push_back(cell ? '1' : '0');
             }
         }
         return result;
@@ -84,7 +86,7 @@ class GameOfLife {
             return;
         }
 
-        int messageLength = message.length();
+        int messageLength = static_cast<int>(message.length());
         int centerRow = rows / 2;
         int startCol = (cols - messageLength / 2);
 
@@ -100,7 +102,7 @@ public:
         auto [termRows, termCols] = getTerminalSize();
         rows = termRows;
         cols = termCols;
-        grid = std::vector<std::vector<char>>(rows, std::vector<char>(cols, DEAD));
+        grid = std::vector<std::vector<bool>>(rows, std::vector<bool>(cols, false));
     }
 
     static void clearScreen() {
@@ -157,8 +159,8 @@ public:
             }
         } else {
             for (auto& row : grid) {
-                for (auto& cell : row) {
-                    cell = (static_cast<float>(rand()) / RAND_MAX < aliveProbability) ? ALIVE : DEAD;
+                for (auto cell : row) {
+                    cell = (static_cast<float>(rand()) / RAND_MAX < aliveProbability);
                     if (cell == ALIVE) {
                         currentAliveCells++;
                     }
@@ -167,12 +169,27 @@ public:
         }
     }
 
+    void addPattern(const Pattern& pattern, const int xOffset, const int yOffset) {
+        const int centerRow = rows / 2;
+        const int centerCol = cols / 2;
+
+        const int targetRow = (centerRow + yOffset + rows) % rows;  // y offset affects rows
+        const int targetCol = (centerCol + xOffset + cols) % cols;  // x offset affects columns
+
+        for (const auto& [rowOffset, colOffset] : pattern.cells) {
+            int r = (targetRow + rowOffset + rows) % rows;
+            int c = (targetCol + colOffset + cols) % cols;
+            grid[r][c] = ALIVE;
+            currentAliveCells++;
+        }
+    }
+
     void displayGrid() const {
         moveCursor();
 
         for (const auto& row : grid) {
-            for (const char cell : row) {
-                std::cout << cell << ' ';
+            for (const bool cell : row) {
+                std::cout << (cell ? ALIVE_CHAR : DEAD_CHAR) << ' ';
             }
             std::cout << '\n';
         }
@@ -199,7 +216,7 @@ public:
     }
 
     void computeNextGeneration() {
-        std::vector<std::vector<char>> newGrid = grid;
+        std::vector<std::vector<bool>> newGrid = grid;
 
         for (int i = 0; i < rows; i++) {
             for (int j = 0; j < cols; j++) {
@@ -233,7 +250,7 @@ public:
 
     bool areAllDead() const {
         for (const auto& row : grid) {
-            for (char cell : row) {
+            for (bool cell : row) {
                 if (cell == ALIVE) {
                     return false;  // Found a live cell
                 }
@@ -260,6 +277,14 @@ public:
     void run() {
         selectPattern();
         setPattern();
+
+        // addPattern(PATTERNS[2], -10, 0);
+        // addPattern(PATTERNS[2], -10, -4);
+        // addPattern(PATTERNS[2], 10, 0);
+        // addPattern(PATTERNS[2], 10, -4);
+        // addPattern(PATTERNS[8], 0, 0);
+        // addPattern(PATTERNS[9], 0, 0);
+
         hideCursor();
         clearScreen();
         displayGrid();
@@ -288,20 +313,58 @@ const std::vector<Pattern> GameOfLife::PATTERNS = {
     {"Blinker", {{0,0}, {1,0}, {2,0}}},
     {"Toad", {{0,1}, {0,2}, {0,3}, {1,0}, {1,1}, {1,2}}},
     {"Beacon", {{0,0}, {0,1}, {1,0}, {2,3}, {3,2}, {3,3}}},
+    {"Block", {{0,0}, {0,1}, {1,0}, {1,1}}},
+    {"Loaf", {{0,1}, {0,2}, {1,0}, {1,3}, {2,1}, {2,3}, {3,2}}},
+    {"Boat", {{0,0}, {0,1}, {1,0}, {1,2}, {2,1}}},
+    {"Pulsar", {
+                {2,4}, {2,5}, {2,6}, {2,10}, {2,11}, {2,12},
+                {4,2}, {4,7}, {4,9}, {4,14},
+                {5,2}, {5,7}, {5,9}, {5,14},
+                {6,2}, {6,7}, {6,9}, {6,14},
+                {7,4}, {7,5}, {7,6}, {7,10}, {7,11}, {7,12},
+                {9,4}, {9,5}, {9,6}, {9,10}, {9,11}, {9,12},
+                {10,2}, {10,7}, {10,9}, {10,14},
+                {11,2}, {11,7}, {11,9}, {11,14},
+                {12,2}, {12,7}, {12,9}, {12,14},
+                {14,4}, {14,5}, {14,6}, {14,10}, {14,11}, {14,12}
+    }},
     {"Glider Gun", {
-        {0,4}, {0,5}, {1,4}, {1,5}, {10,4}, {10,5}, {10,6}, {11,3}, {11,7},
-        {12,2}, {12,8}, {13,2}, {13,8}, {14,5}, {15,3}, {15,7}, {16,4},
-        {16,5}, {16,6}, {17,5}, {20,2}, {20,3}, {20,4}, {21,2}, {21,3},
-        {21,4}, {22,1}, {22,5}, {24,0}, {24,1}, {24,5}, {24,6}
+                {0,4}, {0,5}, {1,4}, {1,5}, {10,4}, {10,5}, {10,6}, {11,3}, {11,7},
+                {12,2}, {12,8}, {13,2}, {13,8}, {14,5}, {15,3}, {15,7}, {16,4},
+                {16,5}, {16,6}, {17,5}, {20,2}, {20,3}, {20,4}, {21,2}, {21,3},
+                {21,4}, {22,1}, {22,5}, {24,0}, {24,1}, {24,5}, {24,6}
+    }},
+    {"five", {{0, -1}, {0, 0}, {-1, 0}, {1, 0}, {1, 1}}},
+    {"Penta-decathlon", {{-5, 0},
+                                    {-4, -1}, {-4, 1},
+                                    {-3, -2}, {-3, 2},
+                                    {-2, -2}, {-2, 2},
+                                    {-1, -2}, {-1, 2},
+                                    {0, -2}, {0, 2},
+                                    {1, -2}, {1, 2},
+                                    {2, -2}, {2, 2},
+                                    {3, -1}, {3, 1},
+                                    {4, 0}}},
+    {"butterfly", {
+        {-6, 2}, {-5, 2}, {0, 2}, {1, 2},
+        {-5, 3}, {-4, 3}, {-2, 3}, {-1, 3},
+        {-6, 4}, {-4, 4}, {-2, 4}, {0, 4}, {2, 4},
+        {-5, 5}, {-4, 5}, {-3, 5}, {-1, 5}, {0, 5}, {1, 5},
+        {-5, 6}, {-3, 6}, {-1, 6}, {1, 6}, {3, 6},
+        {-4, 7}, {-3, 7}, {-2, 7}, {0, 7}, {1, 7}, {2, 7},
+        {-4, 9}, {-3, 9}, {-2, 9}, {0, 9}, {1, 9}, {2, 9},
+        {-5, 10}, {-3, 10}, {-1, 10}, {1, 10}, {3, 10},
+        {-5, 11}, {-4, 11}, {-3, 11}, {-1, 11}, {0, 11}, {1, 11},
+        {-6, 12}, {-4, 12}, {-2, 12}, {0, 12}, {2, 12},
+        {-5, 13}, {-4, 13}, {-2, 13}, {-1, 13},
+        {-6, 14}, {-5, 14}, {0, 14}, {1, 14}
     }}
 };
 
 
 int main() {
     srand(time(nullptr));
-
     GameOfLife game;
     game.run();
-
     return 0;
 }
