@@ -7,27 +7,248 @@
 #include <thread>
 #include <sys/ioctl.h>      // for terminal size
 #include <unistd.h>         // for terminal size
+#include <unordered_map>    // for generation history
 
-constexpr char ALIVE    {'#'};
-constexpr char DEAD     {'.'};
-constexpr int  ROWS      {40};
-constexpr int  COLS      {40};
-constexpr int  DELAY_MS  {100};
-
-std::pair<int, int> getTerminalSize() {
-    struct winsize size{};
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == -1) {
-        return {24, 80};
-    }
-    return {size.ws_row - 5, size.ws_col / 2};
-}
 
 struct Pattern {
     std::string name;
     std::vector<std::pair<int, int>> cells; // relative to center
 };
 
-static const std::vector<Pattern> PATTERNS = {
+class GameOfLife {
+    static constexpr char ALIVE             {'#'};
+    static constexpr char DEAD              {'.'};
+    static constexpr int  DELAY_MS          {100};
+    static constexpr int  MAX_GENERATIONS {10000};
+
+    std::vector<std::vector<char>> grid;
+    int rows                   {};
+    int cols                   {};
+    int generation             {};
+    int currentAliveCells      {};
+    int totalBirths            {};
+    int totalDeaths            {};
+    int loopLength             {};
+    float aliveProbability {0.2f};
+    Pattern pattern;
+    std::unordered_map<std::string, int> generationHistory;
+
+    static const std::vector<Pattern> PATTERNS;
+
+    static std::pair<int, int> getTerminalSize() {
+        struct winsize size{};
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == -1) {
+            return {24, 80};
+        }
+        return {size.ws_row - 5, size.ws_col / 2};
+    }
+
+    int countAliveNeighbors(const int row, const int col) const {
+        int count = 0;
+
+        for (int dRow = -1; dRow <= 1; dRow++) {
+            for (int dCol = -1; dCol <= 1; dCol++) {
+                if (dRow == 0 && dCol == 0) continue;
+
+                const int neighborRow = (row + dRow + rows) % rows;
+                const int neighborCol = (col + dCol + cols) % cols;
+
+                if (grid[neighborRow][neighborCol] == ALIVE) {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    std::string serializeGrid() const {
+        std::string result;
+        for (const auto& row : grid) {
+            for (char cell : row) {
+                result.push_back(cell);
+            }
+        }
+        return result;
+    }
+
+public:
+    GameOfLife() {
+        auto [termRows, termCols] = getTerminalSize();
+        rows = termRows;
+        cols = termCols;
+        grid = std::vector<std::vector<char>>(rows, std::vector<char>(cols, DEAD));
+    }
+
+    static void clearScreen() {
+        std::cout << "\033[2J\033[3J\033[1;1H";
+    }
+
+    static void moveCursor() {
+        std::cout << "\033[1;1H";
+    }
+
+    static void hideCursor() {
+        std::cout << "\033[?25l";
+    }
+
+    static void showCursor() {
+        std::cout << "\033[?25h";
+    }
+
+    void selectPattern() {
+        while (true) {
+            std::cout << "Select an initial pattern. Available patterns:\n";
+            std::cout << "0. " << PATTERNS[0].name << "\n";
+
+            for (size_t i = 1; i < PATTERNS.size(); ++i) {
+                std::cout << i << ". " << PATTERNS[i].name << "\n";
+            }
+
+            std::cout << "Enter your choice (0-" << PATTERNS.size()-1 << "): ";
+            int choice;
+            std::cin >> choice;
+
+            if (std::cin.fail() || choice < 0 || choice >= static_cast<int>(PATTERNS.size())) {
+                clearScreen();
+                std::cin.clear();
+                std::cin.ignore(1000, '\n');
+                std::cout << "Invalid input. Please try again.\n";
+            } else {
+                pattern = PATTERNS[choice];
+                break;
+            }
+        }
+    }
+
+    void setPattern() {
+        if (pattern.name != "Random") {
+            const auto centerRow = rows / 2;
+            const auto centerCol = cols / 2;
+
+            for (const auto& [rowOffset, colOffset] : pattern.cells) {
+                int r = (centerRow + rowOffset + rows) % rows;
+                int c = (centerCol + colOffset + cols) % cols;
+                grid[r][c] = ALIVE;
+                currentAliveCells++;
+            }
+        } else {
+            for (auto& row : grid) {
+                for (auto& cell : row) {
+                    cell = (static_cast<float>(rand()) / RAND_MAX < aliveProbability) ? ALIVE : DEAD;
+                    if (cell == ALIVE) {
+                        currentAliveCells++;
+                    }
+                }
+            }
+        }
+    }
+
+    void displayGrid() const {
+        moveCursor();
+
+        for (const auto& row : grid) {
+            for (const char cell : row) {
+                std::cout << cell << ' ';
+            }
+            std::cout << '\n';
+        }
+        std::cout << "\nPattern: "          << pattern.name
+                  << " | Generation: "      << generation
+                  << " | Alive cells: "     << currentAliveCells
+                  << " | Total births: "    << totalBirths
+                  << " | Total deaths: "    << totalDeaths
+                  << "\nPress Ctrl+C to exit\n";
+        std::cout << generationHistory.size() << loopLength;
+        std::cout.flush();
+    }
+
+    void computeNextGeneration() {
+        std::vector<std::vector<char>> newGrid = grid;
+
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                const int neighbors = countAliveNeighbors(i, j);
+
+                if (grid[i][j] == ALIVE) {
+                    // Alive cell
+                    if (neighbors < 2 || neighbors > 3) {
+                        // Dies due to underpopulation or overpopulation
+                        newGrid[i][j] = DEAD;
+                        totalDeaths++;
+                        currentAliveCells--;
+                    }
+                    // If neighbors is 2 or 3, cell stays alive (already ALIVE)
+                } else {
+                    // Dead cell
+                    if (neighbors == 3) {
+                        // Becomes alive due to reproduction
+                        newGrid[i][j] = ALIVE;
+                        totalBirths++;
+                        currentAliveCells++;
+                    }
+                    // Otherwise, cell stays dead (already DEAD)
+                }
+            }
+        }
+
+        grid = newGrid;
+        generation++;
+    }
+
+    bool areAllDead() const {
+        for (const auto& row : grid) {
+            for (char cell : row) {
+                if (cell == ALIVE) {
+                    return false;  // Found a live cell
+                }
+            }
+        }
+        return true;  // No live cells found
+    }
+
+    void detectLoop() {
+        if (areAllDead()) {
+            loopLength = -1;
+            return;
+        }
+
+        std::string currentState = serializeGrid();
+
+        if (generationHistory.contains(currentState)) {
+            loopLength = generation - generationHistory[currentState];
+        }
+
+        generationHistory[currentState] = generation;
+    }
+
+    void run() {
+        selectPattern();
+        setPattern();
+        hideCursor();
+        clearScreen();
+        displayGrid();
+
+        std::cout << "\nInitial pattern: " << pattern.name
+                  << " | Press Enter to start simulation...";
+        std::cout.flush();
+        std::cin.ignore(1000, '\n');
+        std::cin.get();
+        clearScreen();
+
+        for (int gen = 0; gen < MAX_GENERATIONS; gen++) {
+            displayGrid();
+            std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_MS));
+            computeNextGeneration();
+            detectLoop();
+        }
+
+        showCursor();
+        std::cout << "\nGame ended.\n";
+    }
+};
+
+const std::vector<Pattern> GameOfLife::PATTERNS = {
     {"Random", {}},
     {"Glider", {{0,1}, {1,2}, {2,0}, {2,1}, {2,2}}},
     {"Blinker", {{0,0}, {1,0}, {2,0}}},
@@ -41,153 +262,12 @@ static const std::vector<Pattern> PATTERNS = {
     }}
 };
 
-void displayGrid(const std::vector<std::vector<char>>& grid, const int generation,
-                 const std::string& patternName) {
-    std::cout << "\033[1;1H";
-
-    for (const auto& row : grid) {
-        for (const char cell : row) {
-            std::cout << cell << ' ';
-        }
-        std::cout << '\n';
-    }
-    std::cout << "\nPattern: " << patternName << " | "
-              << "Generation: " << generation << " | "
-              << "Press Ctrl+C to exit\n";
-    std::cout.flush();
-}
-
-std::vector<std::vector<char>> createGrid(const int rows, const int cols) {
-    return std::vector<std::vector<char>>(rows, std::vector<char>(cols, DEAD));
-}
-
-void setInitialPattern(std::vector<std::vector<char>>& grid, const Pattern& pattern) {
-    const auto rows = static_cast<int>(grid.size());
-    const auto cols = static_cast<int>(grid[0].size());
-    const auto centerRow = rows / 2;
-    const auto centerCol = cols / 2;
-
-    for (const auto& [rowOffset, colOffset] : pattern.cells) {
-        int r = (centerRow + rowOffset + rows) % rows;
-        int c = (centerCol + colOffset + cols) % cols;
-
-        grid[r][c] = ALIVE;
-    }
-}
-
-void setRandomPattern(auto& grid, float aliveProbability = 0.2f) {
-    for (auto& row : grid) {
-        for (auto& cell : row) {
-            cell = (static_cast<float>(rand()) / RAND_MAX < aliveProbability) ? ALIVE : DEAD;
-        }
-    }
-}
-
-Pattern selectPattern() {
-    while (true) {
-        std::cout << "Select an initial pattern. Available patterns:\n";
-        std::cout << "0. " << PATTERNS[0].name << "\n";
-
-        for (size_t i = 1; i < PATTERNS.size(); ++i) {
-            std::cout << i << ". " << PATTERNS[i].name << "\n";
-        }
-
-        std::cout << "Enter your choice (0-" << PATTERNS.size()-1 << "): ";
-        int choice;
-        std::cin >> choice;
-
-        if (std::cin.fail() || choice < 0 || choice >= static_cast<int>(PATTERNS.size())) {
-            std::cout << "\033[2J\033[3J\033[1;1H";
-            std::cin.clear();
-            std::cin.ignore(1000, '\n');
-            std::cout << "Invalid input. Please try again.\n";
-        } else {
-            return PATTERNS[choice];
-        }
-    }
-}
-
-int countAliveNeighbors(const std::vector<std::vector<char>>& grid, const int row, const int col) {
-    int count = 0;
-    const auto rows = static_cast<int>(grid.size());
-    const auto cols = static_cast<int>(grid[0].size());
-
-    for (int dRow = -1; dRow <= 1; dRow++) {
-        for (int dCol = -1; dCol <= 1; dCol++) {
-            if (dRow == 0 && dCol == 0) continue;
-
-            const int neighborRow = (row + dRow + rows) % rows;
-            const int neighborCol = (col + dCol + cols) % cols;
-
-            if (grid[neighborRow][neighborCol] == ALIVE) {
-                count++;
-            }
-        }
-    }
-
-    return count;
-}
-
-std::vector<std::vector<char>> nextGeneration(const std::vector<std::vector<char>>& grid) {
-    const auto rows = static_cast<int>(grid.size());
-    const auto cols = static_cast<int>(grid[0].size());
-    std::vector<std::vector<char>> newGrid = grid;
-
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            const int neighbors = countAliveNeighbors(grid, i, j);
-
-            if (grid[i][j] == ALIVE) {
-                // Alive cell
-                if (neighbors < 2 || neighbors > 3) {
-                    // Dies due to underpopulation or overpopulation
-                    newGrid[i][j] = DEAD;
-                }
-                // If neighbors is 2 or 3, cell stays alive (already ALIVE)
-            } else {
-                // Dead cell
-                if (neighbors == 3) {
-                    // Becomes alive due to reproduction
-                    newGrid[i][j] = ALIVE;
-                }
-                // Otherwise, cell stays dead (already DEAD)
-            }
-        }
-    }
-
-    return newGrid;
-}
 
 int main() {
     srand(time(nullptr));
 
-    auto [termRows, termCols] = getTerminalSize();
-    Pattern selectedPattern = selectPattern();
+    GameOfLife game;
+    game.run();
 
-    auto grid = createGrid(termRows, termCols);
-    if (selectedPattern.name == "Random") {
-        setRandomPattern(grid);
-    } else {
-        setInitialPattern(grid, selectedPattern);
-    }
-
-    std::cout << "\033[2J\033[?25l";
-    displayGrid(grid, 0, selectedPattern.name);
-    std::cout << "\nInitial pattern: " << selectedPattern.name
-              << " | Press Enter to start simulation...";
-    std::cout.flush();
-
-    std::cin.ignore(1000, '\n');
-    std::cin.get();
-
-    int generation = 0;
-    while (true) {
-        displayGrid(grid, generation, selectedPattern.name);
-        std::this_thread::sleep_for(std::chrono::milliseconds(DELAY_MS));
-        grid = nextGeneration(grid);
-        generation++;
-    }
-
-    std::cout << "Game ended." << '\n';
     return 0;
 }
